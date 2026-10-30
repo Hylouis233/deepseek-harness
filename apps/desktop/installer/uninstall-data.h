@@ -93,6 +93,29 @@ inline DWORD RemoveTree(const std::wstring& path) {
     return first ? first : error;
 }
 
+// The installer selects a validated application path; only it and its GUID-named transaction siblings are owned.
+// Reparse points inside an owned tree are unlinked without visiting their targets.
+inline DWORD RemoveApplication(LPCWSTR input, LPCWSTR installation) {
+    std::wstring path, install;
+    if (!Normalize(input, path) || !Normalize(installation, install)) return ERROR_INVALID_NAME;
+    if (_wcsicmp(path.c_str(), install.c_str()) != 0) {
+        if (path.size() != install.size() + 5 + 38
+            || _wcsnicmp(path.c_str(), install.c_str(), install.size()) != 0) return ERROR_ACCESS_DENIED;
+        const std::wstring suffix = path.substr(install.size());
+        if (suffix.compare(0, 5, L".new-") != 0 && suffix.compare(0, 5, L".old-") != 0) return ERROR_ACCESS_DENIED;
+        CLSID identifier{};
+        if (suffix[5] != L'{' || suffix.back() != L'}'
+            || FAILED(CLSIDFromString(suffix.c_str() + 5, &identifier))) return ERROR_ACCESS_DENIED;
+    }
+    Handles parents;
+    for (size_t end = path.find(L'\\', 3); end != std::wstring::npos; end = path.find(L'\\', end + 1)) {
+        DWORD error = Pin(path.substr(0, end), parents);
+        if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) return ERROR_SUCCESS;
+        if (error) return error;
+    }
+    return RemoveTree(path);
+}
+
 // Never select a shell folder, its ancestor, Windows/Program Files descendants,
 // a path overlapping the installation, or a path overlapping the protected root
 // (the configured Harness home). Linked descendants are unlinked only.

@@ -12,7 +12,7 @@ LangString decompressionFailed ${LANG_ENGLISH} "Payload extraction failed"
 !macroend
 !ifdef SOURCE_DLL
   LoadLanguageFile "${NSISDIR}\Contrib\Language files\SimpChinese.nlf"
-  !include "..\..\installer\strings.nsh"
+  !include "${INSTALLER_STRINGS_FILE}"
   !define DSH_INSTALLER_LOG_DIR "${REPORT_DIR}"
   !include "..\..\scripts\installer.nsh"
 !else
@@ -30,6 +30,15 @@ Section
   !endif
   StrCpy $INSTDIR "${TARGET_DIR}"
   !insertmacro dshStageApplication
+  !ifdef JUNCTION_TARGET
+    nsExec::ExecToStack '"$SYSDIR\cmd.exe" /d /c mklink /J "$dshNewDirectory\linked-runtime" "${JUNCTION_TARGET}"'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      SetErrorLevel 3
+      Quit
+    ${EndIf}
+  !endif
   !ifdef RESTORE_CONFLICT
     Rename $dshFinalDirectory $dshOldDirectory
     StrCpy $dshOldMoved "1"
