@@ -12,6 +12,12 @@ Var dshRestoreError
 Var dshDirectoryLogDirectory
 Var dshRecoveryStopped
 
+!macro dshRemoveApplicationDirectory DIRECTORY
+  Push $0
+  System::Call '$PLUGINSDIR\window-frame.dll::InstallerRemoveApplicationDirectory(w "${DIRECTORY}", w "$dshFinalDirectory") i.r0 ?c'
+  Pop $0
+!macroend
+
 ; MoveFileEx preserves the destination and exposes the Windows error before rollback changes it.
 ; Open files inside a directory can make its rename return access denied (5).
 !macro dshDirectoryOperation SOURCE DESTINATION RESULT PHASE
@@ -148,7 +154,7 @@ FunctionEnd
 Function dshRollbackDirectories
   SetOutPath $PLUGINSDIR
   ${If} $dshNewMoved == "1"
-    RMDir /r "\\?\$dshFinalDirectory"
+    !insertmacro dshRemoveApplicationDirectory "$dshFinalDirectory"
     StrCpy $dshNewMoved ""
   ${EndIf}
   ${If} $dshOldMoved == "1"
@@ -156,13 +162,13 @@ Function dshRollbackDirectories
     ${If} $dshRestoreError != 0
       ; Leave the complete backup in place if another process prevents restoration.
       DetailPrint $dshOldDirectory
-      RMDir /r "\\?\$dshNewDirectory"
+      !insertmacro dshRemoveApplicationDirectory "$dshNewDirectory"
       Return
     ${EndIf}
     StrCpy $dshOldMoved ""
   ${EndIf}
   ${If} $dshNewDirectory != ""
-    RMDir /r "\\?\$dshNewDirectory"
+    !insertmacro dshRemoveApplicationDirectory "$dshNewDirectory"
   ${EndIf}
   StrCpy $INSTDIR $dshFinalDirectory
 FunctionEnd
@@ -218,7 +224,7 @@ FunctionEnd
 !macro dshFinishDirectories
   StrCpy $dshNewMoved ""
   ${If} $dshOldMoved == "1"
-    RMDir /r "\\?\$dshOldDirectory"
+    !insertmacro dshRemoveApplicationDirectory "$dshOldDirectory"
     StrCpy $dshOldMoved ""
   ${EndIf}
 !macroend

@@ -86,6 +86,17 @@ int wmain(int argc, wchar_t** argv) {
     // A protected root elsewhere does not block removal.
     assert(uninstall_data::Remove(data.c_str(), installation.c_str(), (root + L"\\elsewhere").c_str()) == ERROR_SUCCESS);
     assert(!Exists(data));
-    assert(RemoveDirectoryW(installation.c_str()));
+    assert(uninstall_data::RemoveApplication(root.c_str(), installation.c_str()) == ERROR_ACCESS_DENIED);
+    assert(uninstall_data::RemoveApplication(L"C:\\", installation.c_str()) == ERROR_INVALID_NAME);
+    assert(uninstall_data::RemoveApplication(installation.c_str(), L"relative") == ERROR_INVALID_NAME);
+    const std::wstring transaction = installation + L".new-{01234567-89AB-CDEF-0123-456789ABCDEF}";
+    assert(CreateDirectoryW(transaction.c_str(), nullptr));
+    File(transaction + L"\\asset.txt");
+    assert(uninstall_data::RemoveApplication(transaction.c_str(), installation.c_str()) == ERROR_SUCCESS);
+    assert(!Exists(transaction));
+    assert(uninstall_data::RemoveApplication(transaction.c_str(), installation.c_str()) == ERROR_SUCCESS);
+    assert(uninstall_data::RemoveApplication((installation + L".old-unrelated").c_str(), installation.c_str()) == ERROR_ACCESS_DENIED);
+    assert(uninstall_data::RemoveApplication((installation + L".old-{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}").c_str(), installation.c_str()) == ERROR_ACCESS_DENIED);
+    assert(uninstall_data::RemoveApplication(installation.c_str(), installation.c_str()) == ERROR_SUCCESS);
     assert(RemoveDirectoryW(root.c_str()));
 }

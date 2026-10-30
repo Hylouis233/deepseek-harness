@@ -87,12 +87,13 @@ export function installWindowsDirectoryInstaller() {
 /**
  * Keep user-data removal in the native helper, which refuses unsafe roots and never follows links.
  * @param {string} source - Pinned upstream uninstaller source.
- * @returns {string} Uninstaller with long-path application removal and no upstream RMDir data removal.
+ * @returns {string} Uninstaller with long-path application removal that unlinks reparse points and no upstream RMDir data removal.
  */
 export function directoryUninstaller(source) {
   const normalized = source.replaceAll('\r\n', '\n')
   const start = normalized.indexOf('  Var /GLOBAL isDeleteAppData\n')
   const end = normalized.indexOf('  DeleteRegKey SHELL_CONTEXT "${UNINSTALL_REGISTRY_KEY}"', start)
   if (start < 0 || end < 0) throw new Error('NSIS uninstaller data removal template changed')
-  return replaceOnce(normalized.slice(0, start) + normalized.slice(end), 'RMDir /r $INSTDIR', 'RMDir /r "\\\\?\\$INSTDIR"')
+  return replaceOnce(normalized.slice(0, start) + normalized.slice(end), 'RMDir /r $INSTDIR',
+    `System::Call '$PLUGINSDIR\\window-frame.dll::InstallerRemoveApplicationDirectory(w "$INSTDIR", w "$INSTDIR") ?c'`)
 }

@@ -70,6 +70,11 @@ extern "C" __declspec(dllexport) DWORD __cdecl UninstallRemoveData(LPCWSTR path,
     return uninstall_data::Remove(path, installation, protectedRoot);
 }
 
+// Removes only the selected application or its transaction siblings; linked descendants retain their targets.
+extern "C" __declspec(dllexport) DWORD __cdecl InstallerRemoveApplicationDirectory(LPCWSTR path, LPCWSTR installation) {
+    return uninstall_data::RemoveApplication(path, installation);
+}
+
 // Returns a Win32 error code; only ordinary empty directories strictly below the stop directory are removed.
 extern "C" __declspec(dllexport) DWORD __cdecl UninstallRemoveEmptyParents(LPCWSTR path, LPCWSTR stop) {
     return uninstall_data::RemoveEmptyParents(path, stop);

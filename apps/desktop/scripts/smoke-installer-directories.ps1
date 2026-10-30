@@ -9,8 +9,12 @@ $ErrorActionPreference = 'Stop'
 $Makensis = [System.IO.Path]::GetFullPath($Makensis)
 $SevenZip = [System.IO.Path]::GetFullPath($SevenZip)
 if ($FrameLibrary) { $FrameLibrary = [System.IO.Path]::GetFullPath($FrameLibrary) }
-$scratch = [System.IO.Directory]::CreateTempSubdirectory('dsh-directory-smoke-').FullName
 $fixture = Join-Path $PSScriptRoot '../tests/fixtures/installer-directory-smoke.nsi'
+if (-not $FrameLibrary) {
+  $FrameLibrary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../.desktop-build/targets/win-x64/installer-ui/window-frame.dll'))
+}
+if (-not (Test-Path -LiteralPath $FrameLibrary -PathType Leaf)) { throw 'Prepare the native installer helper or pass -FrameLibrary before running directory cleanup checks.' }
+$scratch = [System.IO.Directory]::CreateTempSubdirectory('dsh-directory-smoke-').FullName
 
 function Invoke-Checked([string]$Executable, [string[]]$Arguments) {
   & $Executable @Arguments | Out-Host
@@ -18,9 +22,15 @@ function Invoke-Checked([string]$Executable, [string[]]$Arguments) {
 }
 
 try {
+  $strings = Join-Path $scratch 'strings.nsh'
+  $localeModule = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'installer-locales.mjs'))
+  Invoke-Checked 'node' @('--input-type=module', '-e', 'import {writeFile} from "node:fs/promises"; import {pathToFileURL} from "node:url"; const m=await import(pathToFileURL(process.argv[1]).href); await writeFile(process.argv[2], m.renderInstallerStrings(m.readInstallerLocales().filter(x=>["en_US","zh_CN"].includes(x.id))));', $localeModule, $strings)
   $payload = Join-Path $scratch 'payload'
   New-Item -ItemType Directory -Path $payload | Out-Null
   [System.IO.File]::WriteAllText((Join-Path $payload 'asset.txt'), 'new asset')
+  $payloadRuntime = Join-Path $payload 'resources/runtime'
+  [IO.Directory]::CreateDirectory($payloadRuntime) | Out-Null
+  [IO.File]::WriteAllText((Join-Path $payloadRuntime 'sentinel.txt'), 'new runtime')
   $deepPayload = Join-Path $payload (('nested-' * 20) + '\asset-' + ('x' * 60) + '.txt')
   [IO.Directory]::CreateDirectory((Split-Path $deepPayload -Parent)) | Out-Null
   [IO.File]::WriteAllText($deepPayload, 'long path asset')
@@ -29,7 +39,8 @@ try {
   $brokenArchive = Join-Path $scratch 'broken.7z'
   [System.IO.File]::WriteAllText($brokenArchive, 'invalid archive')
 
-  foreach ($mode in @('first', 'upgrade', 'transient-lock', 'locked', 'locked-stage', 'missing-stage', 'restore-conflict', 'broken', 'cancelled')) {
+  $successful = @('first', 'upgrade', 'upgrade-junction', 'transient-lock')
+  foreach ($mode in @('first', 'upgrade', 'upgrade-junction', 'transient-lock', 'locked', 'locked-stage', 'missing-stage', 'restore-conflict', 'broken', 'cancelled', 'cancelled-junction')) {
     $caseRoot = Join-Path $scratch $mode
     $target = Join-Path $caseRoot 'Application'
     New-Item -ItemType Directory -Path $caseRoot | Out-Null
@@ -37,6 +48,14 @@ try {
       New-Item -ItemType Directory -Path $target | Out-Null
       [System.IO.File]::WriteAllText((Join-Path $target 'asset.txt'), 'old asset')
       [System.IO.File]::WriteAllText((Join-Path $target 'obsolete.txt'), 'old only')
+      $runtime = Join-Path $target 'resources/runtime'
+      [IO.Directory]::CreateDirectory($runtime) | Out-Null
+      [IO.File]::WriteAllText((Join-Path $runtime 'sentinel.txt'), 'old runtime')
+      if ($mode -eq 'upgrade-junction') {
+        $app = Join-Path $target 'resources/app'
+        [IO.Directory]::CreateDirectory($app) | Out-Null
+        New-Item -ItemType Junction -Path (Join-Path $app 'runtime') -Target $runtime | Out-Null
+      }
       $oldDeep = Join-Path $target ([IO.Path]::GetRelativePath($payload, $deepPayload))
       [IO.Directory]::CreateDirectory((Split-Path $oldDeep -Parent)) | Out-Null
       [IO.File]::WriteAllText($oldDeep, 'old long path asset')
@@ -45,11 +64,12 @@ try {
     $caseArchive = if ($mode -eq 'broken') { $brokenArchive } else { $archive }
     $reportDir = Join-Path $caseRoot 'installer-logs'
     $compileArgs = @('/V2', "/DOUTPUT_FILE=$probe", "/DPAYLOAD_FILE=$caseArchive", "/DTARGET_DIR=$target", "/DDSH_SEVENZIP_PATH=$SevenZip")
-    if ($FrameLibrary) { $compileArgs += @("/DSOURCE_DLL=$FrameLibrary", "/DREPORT_DIR=$reportDir") }
+    if ($FrameLibrary) { $compileArgs += @("/DSOURCE_DLL=$FrameLibrary", "/DREPORT_DIR=$reportDir", "/DINSTALLER_STRINGS_FILE=$strings") }
     if ($mode -eq 'missing-stage') { $compileArgs += '/DMISSING_STAGE' }
     if ($mode -eq 'locked-stage') { $compileArgs += '/DLOCKED_STAGE' }
     if ($mode -eq 'restore-conflict') { $compileArgs += '/DRESTORE_CONFLICT' }
-    if ($mode -eq 'cancelled') { $compileArgs += '/DCANCELLED' }
+    if ($mode -in @('cancelled', 'cancelled-junction')) { $compileArgs += '/DCANCELLED' }
+    if ($mode -eq 'cancelled-junction') { $compileArgs += "/DJUNCTION_TARGET=$runtime" }
     Invoke-Checked $Makensis ($compileArgs + $fixture)
     if ($null -ne $SignExecutable) { & $SignExecutable $probe }
     $handle = $null
@@ -87,7 +107,7 @@ try {
         $process.WaitForExit()
         throw "Directory smoke $mode did not exit within 60 seconds"
       }
-      $expectedExit = if ($mode -in @('first', 'upgrade', 'transient-lock')) { 0 } else { 2 }
+      $expectedExit = if ($mode -in $successful) { 0 } else { 2 }
       if ($process.ExitCode -ne $expectedExit) {
         throw "Directory smoke $mode exited with $($process.ExitCode), expected $expectedExit"
       }
@@ -119,11 +139,15 @@ try {
       Write-Output "Directory replacement smoke passed: $mode"
       continue
     }
-    $expectedAsset = if ($mode -in @('first', 'upgrade', 'transient-lock')) { 'new asset' } else { 'old asset' }
+    $expectedAsset = if ($mode -in $successful) { 'new asset' } else { 'old asset' }
     if ([System.IO.File]::ReadAllText((Join-Path $target 'asset.txt')) -ne $expectedAsset) {
       throw "Directory smoke $mode changed the wrong version"
     }
-    $expectObsolete = $mode -notin @('first', 'upgrade', 'transient-lock')
+    $expectedRuntime = if ($mode -in $successful) { 'new runtime' } else { 'old runtime' }
+    if ([IO.File]::ReadAllText((Join-Path $target 'resources/runtime/sentinel.txt')) -ne $expectedRuntime) {
+      throw "Directory smoke $mode followed a junction into retained runtime resources"
+    }
+    $expectObsolete = $mode -notin $successful
     if ((Test-Path -LiteralPath (Join-Path $target 'obsolete.txt')) -ne $expectObsolete) {
       throw "Directory smoke $mode did not preserve the expected old-only file state"
     }
